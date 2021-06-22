@@ -281,3 +281,22 @@ fn copy_many_into_permissions_error() {
         assert!(result.success());
     }
 }
+
+#[test]
+fn self_copy() {
+    let source = HYDRATED_DIR.join("self_copy");
+    remove(&source);
+    fs::create_dir(&source, 0o777).unwrap();
+    let result = fcp_run(&[&source, &source]);
+    assert!(!result.success);
+    assert!(result
+        .stderr
+        .contains("a directory cannot be copied into itself"));
+    remove(&source);
+    fs::create(&source, 0o777).unwrap();
+    let result = fcp_run(&[&source, &source]);
+    assert!(!result.success);
+    assert!(result
+        .stderr
+        .contains("a file cannot be overwritten by itself"));
+}

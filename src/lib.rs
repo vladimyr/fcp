@@ -70,10 +70,16 @@ fn copy_directory(source: (&Path, Metadata), dest: &Path) -> Result<bool, Error>
 }
 
 /// Copy each file in `sources` into the directory `dest`.
-fn copy_into(sources: &[PathBuf], dest: &Path) -> bool {
+fn copy_into(sources: &[PathBuf], dest: &PathBuf) -> bool {
     let metadata = fs::symlink_metadata(dest).unwrap_or_else(|err| fatal(err));
     if !metadata.is_dir() {
         fatal(format!("{} is not a directory", dest.display()));
+    }
+    if sources.contains(dest) {
+        fatal(format!(
+            "{}: a directory cannot be copied into itself",
+            dest.display()
+        ));
     }
     sources
         .into_par_iter()
@@ -93,7 +99,16 @@ pub fn fcp(args: &[String]) -> bool {
         [] | [_] => fatal("Please provide at least two arguments (run 'fcp --help' for details)"),
         [source, dest] => match fs::symlink_metadata(dest) {
             Ok(metadata) if metadata.is_dir() => copy_into(array::from_ref(source), dest),
-            _ => copy_file(source, dest),
+            _ => {
+                if source != dest {
+                    copy_file(source, dest)
+                } else {
+                    fatal(format!(
+                        "{}: a file cannot be overwritten by itself",
+                        dest.display()
+                    ))
+                }
+            }
         },
         [sources @ .., dest] => copy_into(sources, dest),
     }
