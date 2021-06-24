@@ -2,6 +2,7 @@
 //! them to cover the full gamut of POSIX file types, and wrapping them in order to improve the
 //! usefulness of error messages by providing additional context.
 
+use lazy_static::lazy_static;
 use nix::sys::stat::Mode;
 use nix::unistd;
 use std::convert::TryInto;
@@ -9,7 +10,7 @@ use std::error::Error as BaseError;
 use std::fmt;
 use std::fs::{self, DirBuilder, File, Metadata, OpenOptions, Permissions, ReadDir};
 use std::os::unix::fs::{self as unix, DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::{self, Component, Path, PathBuf};
 
 #[derive(Debug)]
 pub struct Error {
@@ -64,6 +65,7 @@ wrap!(fs, read_link, PathBuf);
 wrap!(fs, read_dir, ReadDir);
 wrap!(fs, remove_dir_all, ());
 wrap!(fs, remove_file, ());
+wrap!(fs, canonicalize, PathBuf);
 wrap!(File, open, File);
 wrap2!(symlink, unix, ());
 wrap2!(copy, fs, u64);
@@ -132,5 +134,48 @@ pub fn file_type(path: &Path) -> Result<FileType, Error> {
             "{}: file appears to exist but is an unknown type",
             path.display()
         );
+    })
+}
+
+lazy_static! {
+    static ref ROOT: &'static Path = Path::new("/");
+}
+
+pub fn semicanonicalize(path: &Path, current_dir: &Path) -> Result<PathBuf, Error> {
+    fn unknown_error(path: path::Display) -> Error {
+        Error::new(format!(
+            "{}: an unknown error occurred while processing this path",
+            path
+        ))
+    }
+
+    let mut components = path.components();
+    let last = components
+        .next_back()
+        .ok_or_else(|| Error::new("Empty file path provided as an argument".to_string()))?;
+    let mut prefix = components.as_path().to_path_buf();
+    let prefix_exists = !prefix.as_os_str().is_empty();
+    if prefix_exists {
+        prefix = canonicalize(prefix)?;
+    }
+    Ok(match last {
+        Component::CurDir if prefix_exists => prefix,
+        Component::CurDir => current_dir.to_path_buf(),
+        Component::Normal(filename) if prefix_exists => prefix.join(filename),
+        Component::Normal(filename) => current_dir.join(filename),
+        Component::ParentDir if prefix_exists => {
+            prefix.pop();
+            prefix
+        }
+        Component::ParentDir if current_dir == *ROOT => current_dir.to_path_buf(),
+        Component::ParentDir => current_dir
+            .parent()
+            .ok_or_else(|| unknown_error(path.display()))?
+            .to_path_buf(),
+        Component::RootDir if !prefix_exists => ROOT.to_path_buf(),
+        Component::RootDir => return Err(unknown_error(path.display())),
+        // This is unreachable as opposed to a normal error because fcp shouldn't even compile on
+        // non-unix systems due to depending on the nix crate, so this really should never run.
+        Component::Prefix(_) => unreachable!("fcp does not support non-unix systems"),
     })
 }
